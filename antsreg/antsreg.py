@@ -9,6 +9,7 @@
 #
 
 import os
+import subprocess
 
 # import the Chris app superclass
 from chrisapp.base import ChrisApp
@@ -38,16 +39,36 @@ class AntsReg(ChrisApp):
  
     def define_parameters(self):
         """
-        Define the CLI arguments accepted by this plugin app.
+        Define parameters here as needed.
+        Currently, no parameters are defined.
         """
 
     def run(self, options):
         """
-        Define the code to be run by this plugin app.
+        Execute default command. 
+
+        Pre-requisites: 
+        * Input and output images in .nii.gz format.
+        * fixedImage.nii.gz and movingImage.nii.gz exist in the input directory.
+        * Two dimenstional
+        
+        Output files prefixed with output. 
+        Make sure output directory is world writable.
         """
 
+        subprocess.run('antsRegistrationSyN.sh -d 2 -f {}/fixedImage.nii.gz \
+                        -m {}/movingImage.nii.gz -o {}/output' 
+                       .format(options.inputdir,options.inputdir,options.outputdir)
+                       .split())
 
 # ENTRYPOINT
 if __name__ == "__main__":
     app = AntsReg()
     app.launch()
+
+
+
+
+
+
+
