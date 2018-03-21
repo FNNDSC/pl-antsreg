@@ -32,6 +32,12 @@ class AntsReg(ChrisApp):
     DOCUMENTATION   = 'http://wiki'
     VERSION         = '0.1'
     LICENSE         = 'Opensource (MIT)'
+    MAX_NUMBER_OF_WORKERS = 1024
+    MIN_NUMBER_OF_WORKERS = 1
+    MAX_CPU_LIMIT         = '1000m'
+    MIN_CPU_LIMIT         = '1000m'
+    MAX_MEMORY_LIMIT      = '10Gi'
+    MIN_MEMORY_LIMIT      = '1Gi'
 
     # Fill out this with key-value output descriptive info (such as an output file path
     # relative to the output dir) that you want to save to the output meta file when
