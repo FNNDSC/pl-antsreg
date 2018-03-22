@@ -10,22 +10,23 @@ COPY ["requirements.txt", "${APPROOT}"]
 WORKDIR $APPROOT
 
 ##################  ANTS INSTALLATION ##################
-RUN yum install -y cmake make git libstdc++-static &&   \
-    cd $HOME &&                                         \
-    git clone https://github.com/ANTsX/ANTs.git &&  \
-    cd ANTs &&                                      \ 
-    git checkout tags/v2.2.0 &&                     \
-    mkdir -p bin/ants &&                            \
-    cd bin/ants &&                                  \
-    echo "Starting ccmake" &&                       \
-    cmake $HOME/ANTs &&                             \
-    echo "End ccmake" &&                            \
-    make -j 10 &&                                   \
-    cp -r ~/ANTs/Scripts/. ~/ANTs/bin/ants/bin &&   \
-    rm -rf ~/ANTs                                
-    
+RUN yum install -y cmake make git libstdc++-static && \
+    cd $HOME &&                                       \
+    git clone https://github.com/Chris210634/ANTs.git &&    \
+    cd ANTs &&                                        \
+    mkdir -p bin/ants &&                              \
+    cd bin/ants                                       \
+    echo "Starting ccmake" &&                         \
+    cmake $HOME/ANTs -DUSE_PROCESS_PARALLELIZE_ITK=ON \
+                     -DBUILD_TESTING=OFF              \
+                     -DRUN_LONG_TESTS=OFF             \ 
+                     -DRUN_SHORT_TESTS=OFF &&         \
+    echo "End ccmake" &&                              \
+    make -j 10 &&                                     \
+    cp -r ~/ANTs/Scripts/. ~/ANTs/bin/ants/bin &&     \
+    cp -r ~/ANTs/bin/ants/bin ~ 
 
-ENV ANTSPATH=${HOME}/ANTs/bin/ants/bin/ 
+ENV ANTSPATH=${HOME}/bin/ 
 
 ENV PATH=${ANTSPATH}:$PATH
 #######################################################
@@ -40,7 +41,7 @@ RUN cd $HOME &&                                             \
     make &&                                                 \
     cp ./bin/dcm2niix $ANTSPATH &&                          \
     yum remove -y cmake make git libstdc++-static &&        \
-    rm -rf ~/dcm2niix
+    rm -rf ~/dcm2niix && rm -rf ~/ANTs    
 #######################################################
 
 RUN pip3 install -r requirements.txt
