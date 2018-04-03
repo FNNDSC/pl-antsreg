@@ -38,6 +38,8 @@ class AntsReg(ChrisApp):
     MIN_CPU_LIMIT         = '1000m'
     MAX_MEMORY_LIMIT      = '10Gi'
     MIN_MEMORY_LIMIT      = '1Gi'
+    MIN_GPU_LIMIT = 0  # Override with the minimum number of GPUs, as an integer, for your plugin
+    MAX_GPU_LIMIT = 0  # Override with the maximum number of GPUs, as an integer, for your plugin
 
     # Fill out this with key-value output descriptive info (such as an output file path
     # relative to the output dir) that you want to save to the output meta file when

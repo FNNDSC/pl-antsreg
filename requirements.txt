@@ -1,2 +1,2 @@
-chrisapp==1.0.7
+chrisapp
 filelock==3.0.4
