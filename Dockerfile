@@ -14,6 +14,7 @@ RUN yum install -y cmake make git libstdc++-static && \
     cd $HOME &&                                       \
     git clone https://github.com/Chris210634/ANTs.git &&    \
     cd ANTs &&                                        \
+    git reset --hard 9b0eec74a33c174fcedebf174b5c6baca9c21ccd \
     mkdir -p bin/ants &&                              \
     cd bin/ants                                       \
     echo "Starting ccmake" &&                         \
