@@ -46,111 +46,177 @@ class AntsReg(ChrisApp):
     # called with the --saveoutputmeta flag
     OUTPUT_META_DICT = {}
  
-    # Signals for interprocess communication
+    # Signals for interworker communication
     IDLE  = 0
     START = 1
     EXIT  = 2
 
-    # Files for interprocess communication 
-    tmp_path                = ''
-    proc_num_file_path      = ''
-    proc_num_file_lock      = None
-    slave_state_file_path   = ''
-    slave_state_file_lock   = None
-    args_file_path          = ''
+    # Files for interworker communication 
+    tmp_path                  = ''      # temporary folder to be removed at end of execution
+    worker_num_file_path      = ''      # file used to distribute worker numbers
+    worker_num_file_lock      = None
+    slave_state_file_path     = ''      # file used to send signals to slaves
+    slave_state_file_lock     = None
+    args_file_path            = ''      # file used to send args to slaves to be passed to ants
+    ants_registration_command = 'antsRegistrationSyNQuick.sh'
 
     def define_parameters(self):
         """
-        One parameter currently defined.
-
         -f filename for fixed image. All other files in the input 
         directory will be interpreted as moving images.
+
+        -s set "speed"
+           set to fast to run antsRegistrationSyNQuick.sh
+           set to slow to run antsRegistrationSyN.sh
 
         Define more parameters here as needed.
         """
         self.add_argument('-f', dest='fixed', type=str, optional=False,
                           help='The filename for the fixed image.')
+        self.add_argument('-s', dest='speed', type=str, optional=True, 
+                          default='antsRegistrationSyNQuick.sh',
+                          help='Set to "fast" or "slow" depending on speed and quality desired.')
 
-    def get_process_number(self):
+    def get_worker_number(self):
         """
-        Get the next available process number.
-        Process numbers range from 0 to NUMBER_OF_WORKERS-1.
-        Create file 'proc_num_sync' in tmp_path, which is used
-        to synchronize process number assignment among available processes.
-        Return the process number.
+        Get the next available worker number.
+        worker numbers range from 0 to NUMBER_OF_WORKERS-1.
+        Create file 'worker_num_sync' in tmp_path, which is used
+        to synchronize worker number assignment among available workeres.
+        Return the worker number.
         """
         NUMBER_OF_WORKERS = int(os.environ['NUMBER_OF_WORKERS'])
-        proc_num = 0
-        with self.proc_num_file_lock.acquire():
+        worker_num = 0
+        with self.worker_num_file_lock.acquire():
             try:
-                with open(self.proc_num_file_path,'x') as proc_num_file:
-                    # Current process is assigned 0, next process is assigned 1.
-                    proc_num_file.write('1') 
-                    proc_num_file.close()
-                    proc_num = 0
+                with open(self.worker_num_file_path,'x') as worker_num_file:
+                    # Current worker is assigned 0, next worker is assigned 1.
+                    worker_num_file.write('1') 
+                    worker_num_file.close()
+                    worker_num = 0
+                    print("PLUGIN DEBUG MSG: {} not found. Assuming that I'm first, \
+                           so I'm assigning myself #0 and declaring \
+                           my self as master.".format(self.worker_num_file_path))
             except FileExistsError:
-                with open(self.proc_num_file_path,'r+') as proc_num_file:
-                    # Read process number and overwrite with next process number
-                    proc_num = int(proc_num_file.read().strip())
-                    proc_num_file.seek(0)
-                    proc_num_file.write(str(proc_num + 1))
-                    proc_num_file.truncate()
-                    proc_num_file.close()
-        # Check that proc_num is less than number of processes
-        if proc_num >= NUMBER_OF_WORKERS:
-            raise ValueError('Invalid process number assigned.\
-                              Check proc_num_sync in shared directory.')
-        # Wait for all processes to get their process number
-        last_proc_num = proc_num
+                with open(self.worker_num_file_path,'r+') as worker_num_file:
+                    # Read worker number and overwrite with next worker number
+                    worker_num = int(worker_num_file.read().strip())
+                    worker_num_file.seek(0)
+                    worker_num_file.write(str(worker_num + 1))
+                    worker_num_file.truncate()
+                    worker_num_file.close()
+        # Check that worker_num is less than number of workeres
+        if worker_num >= NUMBER_OF_WORKERS:
+            raise ValueError('PLUGIN ERROR MSG: Invalid worker number assigned.\
+                              Check worker_num_sync in shared directory.')
+        # Wait for all workeres to get their worker number
+        last_worker_num = worker_num
         start_time = time.time()
-        while last_proc_num < NUMBER_OF_WORKERS:
-            with open(self.proc_num_file_path,'r') as proc_num_file:
-                last_proc_num = int(proc_num_file.read().strip())
-                proc_num_file.close()
+        while last_worker_num < NUMBER_OF_WORKERS:
+            with open(self.worker_num_file_path,'r') as worker_num_file:
+                last_worker_num = int(worker_num_file.read().strip())
+                worker_num_file.close()
             time.sleep(1)
+            print("PLUGIN DEBUG MSG: waiting for every one to get proces number. I am #{}, \
+                   next worker will be assigned #{}".format(worker_num,last_worker_num))
             if (time.time() - start_time) > 60:
-                raise RuntimeError('Timed out waiting for other instances to get process number.')
-        print('Assigned Process Number {}.'.format(proc_num))
-        return proc_num
+                raise RuntimeError('PLUGIN ERROR MSG: Timed out waiting \
+                                    for other instances to get worker number.')
+        print('PLUGIN ERROR MSG: Assigned worker Number {}.'.format(worker_num))
+        return worker_num
 
-    def exit_process(self):
+    def exit_worker(self):
         """
-        Exit the current process. Decrement the proc_num_sync file.
-        If the process is the last to leave, then remove tmp directory.
+        Exit the current worker. Decrement the worker_num_sync file.
+        If the worker is the last to leave, then remove tmp directory.
         """
-        with self.proc_num_file_lock.acquire():
-            with open(self.proc_num_file_path,'r+') as proc_num_file:
-                # Read process number and overwrite with decremented process number
-                proc_num = int(proc_num_file.read().strip())
-                proc_num_file.seek(0)
-                proc_num_file.write(str(proc_num - 1))
-                proc_num_file.truncate()
-                proc_num_file.close()
-        if proc_num == 1:
+        print("PLUGIN DEBUG MSG: exiting ... ")
+        with self.worker_num_file_lock.acquire():
+            with open(self.worker_num_file_path,'r+') as worker_num_file:
+                # Read worker number and overwrite with decremented worker number
+                worker_num = int(worker_num_file.read().strip())
+                worker_num_file.seek(0)
+                worker_num_file.write(str(worker_num - 1))
+                worker_num_file.truncate()
+                worker_num_file.close()
+        if worker_num == 1:
             subprocess.run(['rm','-rf',self.tmp_path])
         sys.exit()
 
-    def ants_registration_command_wrapper(self,args):
+    def linear_ants_registration_command_wrapper(self,args):
         """
-        Run ants registration command.
-        args = [fixed_image_name,moving_image_name,out_path,name_wo_ext]
+        Run ants registration command (Rigid and Affine stages only).
+        Output will be named <name_wo_ext>Warped.nii.gz
+      
+        Prerequisites:
+         * args.keys() = [fixed_image_name,moving_image_name,out_path,name_wo_ext,total_threads]
+         * be master worker
         """
-        if len(args) == 0:
-            # Then this is a slave process, need to read args from file first.
-            with open(self.args_file_path,'r') as args_file:
-                args = args_file.read().strip('\n').split('\n')
-                args_file.close()
+        print("PLUGIN DEBUG MSG: Starting linear ants registration stages ... ")
+        os.environ['ITK_NUMBER_OF_WORKERS'] = args["number_of_workers"]
         # Ants Registration Call 
-        subprocess.run('antsRegistrationSyNQuick.sh -d 3 -f {} \
-                        -m {} -o {}/{} -n 4' 
-                       .format(args[0],args[1],args[2],args[3]).split())
-        # Output will be named <name_wo_ext>Warped.nii.gz
+        self.run_bash_command_wrapper(self.ants_registration_command +
+                                      ' -d 3 -f {} -m {} -o {}/{} -n {} -t a'
+                                      .format(args["fixed_image_name"],
+                                              args["moving_image_name"],
+                                              args["out_path"],
+                                              args["name_wo_ext"],
+                                              args["total_threads"]))
+        # Remove extra outputs
+        files_to_be_removed = [args["out_path"] + '/' + args["name_wo_ext"] + 'InverseWarped.nii.gz',
+                               args["out_path"] + '/' + args["name_wo_ext"] + '0GenericAffine.mat']
+        for filename in files_to_be_removed:
+            try:
+                os.remove(filename)
+            except FileNotFoundError:
+                pass
+
+    def syn_ants_registration_command_wrapper(self,args):
+        """
+        Run ants registration command (SyN stage only).
+        Output will be named <name_wo_ext>Warped.nii.gz
+
+        Prerequisites for slave worker:
+         * args.keys() = []
+        Prerequisites for master worker:
+         * args.keys() = [fixed_image_name,moving_image_name,out_path,name_wo_ext,total_threads]
+        """
+        print("PLUGIN DEBUG MSG: Starting SyN ants registration stage ... ")
+        if len(args) == 0:
+            # Then this is a slave worker, need to read args from file first.
+            with open(self.args_file_path,'r') as args_file:
+                args_list = args_file.read().strip('\n').split('\n')
+                args["fixed_image_name"]  = args_list[0]
+                args["moving_image_name"] = args_list[1]
+                args["out_path"]          = args_list[2]
+                args["name_wo_ext"]       = args_list[3]
+                args["total_threads"]     = args_list[4]
+                args_file.close()
+
+        # Ants Registration Call 
+        self.run_bash_command_wrapper(self.ants_registration_command +
+                                      ' -d 3 -f {} -m {} -o {}/{} -n {} -t so' 
+                                      .format(args["fixed_image_name"],
+                                              args["moving_image_name"],
+                                              args["out_path"],
+                                              args["name_wo_ext"],
+                                              args["total_threads"]))
+        # Remove extra outputs
+        files_to_be_removed = [args["out_path"] + '/' + args["name_wo_ext"] + '1InverseWarp.nii.gz',
+                               args["out_path"] + '/' + args["name_wo_ext"] + '1Warp.nii.gz',
+                               args["out_path"] + '/' + args["name_wo_ext"] + 'InverseWarped.nii.gz',
+                               args["out_path"] + '/' + args["name_wo_ext"] + '0GenericAffine.mat']
+        for filename in files_to_be_removed:
+            try:
+                os.remove(filename)
+            except FileNotFoundError:
+                pass
 
     def get_state(self):
         """
-        Return the state of slave processes (as given by master), either IDLE, EXIT, or START.
+        Return the state of slave workeres (as given by master), either IDLE, EXIT, or START.
         All slaves read from the same state file 'slave_state' in tmp_path.
-        This function should only be called by slave processes.
+        This function should only be called by slave workeres.
         """
         with self.slave_state_file_lock.acquire():
             with open(self.slave_state_file_path,'r') as slave_state_file:
@@ -162,7 +228,7 @@ class AntsReg(ChrisApp):
         """
         Write the state to the slave sate file in tmp_path 'slave_state'.
         State must be EXIT, START, or IDLE.
-        Should only be called by master process.
+        Should only be called by master worker.
         """
         with self.slave_state_file_lock.acquire():
             with open(self.slave_state_file_path,'w') as slave_state_file:
@@ -171,9 +237,9 @@ class AntsReg(ChrisApp):
 
     def run_parallel_ants_registration_slave(self):
         """
-        Must be called by slave processes.
+        Must be called by slave workeres.
         This function never returns, it exits python normally when an EXIT signal
-        is sent by the master process.
+        is sent by the master worker.
         The slave waits for START signal from master before running ants registration.
         """
         state = self.IDLE
@@ -184,35 +250,127 @@ class AntsReg(ChrisApp):
                 # Most likely because master hasn't created slave_state file yet
                 pass
             if state == self.START:
-                self.ants_registration_command_wrapper([])
+                self.syn_ants_registration_command_wrapper({})
                 # Wait for IDLE signal from master 
                 while state != self.IDLE:
                     state = self.get_state()
                     time.sleep(1)
+            print("PLUGIN DEBUG MSG: Waiting for master ... ")
             time.sleep(1)
-        self.exit_process()
+        self.exit_worker()
 
     def write_args_to_file(self, args):
         """
-        Should only be called by master process.
+        Should only be called by master worker.
         This method writes the arguments that need to be passed to the ants registration
-        command to file names 'args_file' so that slave processes know what args to pass.
+        command to file names 'args_file' so that slave workeres know what args to pass.
         """
         with open(self.args_file_path,'w') as args_file:
-            for arg in args:
-                args_file.write(arg)
-                args_file.write('\n')
+            args_file.write(args["fixed_image_name"])
+            args_file.write('\n')
+            args_file.write(args["moving_image_name"])
+            args_file.write('\n')
+            args_file.write(args["out_path"])
+            args_file.write('\n')
+            args_file.write(args["name_wo_ext"])
+            args_file.write('\n')
+            args_file.write(args["total_threads"])
+            args_file.write('\n')
             args_file.close()
         
-    def run_parallel_ants_registration_master(self, args):
+    def run_parallel_ants_registration_master(self, linear_ants_args, syn_ants_args):
         """
-        Should only be called by master process. 
-        This is executed when master process is ready to run ants registration.
+        Should only be called by master worker. 
+        This is executed when master worker is ready to run ants registration.
         """
-        self.write_args_to_file(args)
+        # Run Linear stage with single worker
+        self.linear_ants_registration_command_wrapper(linear_ants_args)
+        # Run SyN stage with all workers
+        os.environ['ITK_NUMBER_OF_WORKERS'] = syn_ants_args["number_of_workers"]
+        self.write_args_to_file(syn_ants_args)
         self.write_state(self.START)
-        self.ants_registration_command_wrapper(args)
+        self.syn_ants_registration_command_wrapper(syn_ants_args)
         self.write_state(self.IDLE)
+
+    def run_parallel_ants_registration_master_wrapper(self,
+                                                      fixed_image_name,
+                                                      moving_image_name,
+                                                      out_path):
+        """
+        Wrapper function that does preprocessing and postprocessing before 
+        ants registration proper.
+        ust be master to call.
+        """
+        name_wo_ext = moving_image_name.split('/')[-1].split('.')[0]
+        self.configure_env_for_multi_threaded_execution()
+
+        linear_ants_args = {
+                            "fixed_image_name":   fixed_image_name,
+                            "moving_image_name":  moving_image_name,
+                            "out_path":           out_path,
+                            "name_wo_ext":        name_wo_ext,
+                            "number_of_workers":  '1',
+                            "total_threads":      os.environ['ITK_THREADS_PER_WORKER']
+                           }
+        # moving image for syn registration is output of linear registration
+        syn_ants_args    = {
+                            "fixed_image_name":   fixed_image_name,
+                            "moving_image_name":  out_path + '/' + name_wo_ext + 'Warped.nii.gz',
+                            "out_path":           out_path,
+                            "name_wo_ext":        name_wo_ext,
+                            "number_of_workers":  os.environ['ITK_NUMBER_OF_WORKERS'],
+                            "total_threads":      os.environ['ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS']
+                           }
+        self.run_parallel_ants_registration_master(linear_ants_args, syn_ants_args)
+        
+        self.make_tiled_mosaic_jpeg_wrapper('{}/{}Warped.nii.gz'.format(out_path, name_wo_ext),
+                                            '{}/{}WarpedTiled.jpg'.format(out_path, name_wo_ext),
+                                            out_path)
+        # Remove extra outputs
+        files_to_be_removed = [out_path + '/' + name_wo_ext + 'WarpedTiled.nii']
+        for filename in files_to_be_removed:
+            try:
+                os.remove(filename)
+            except FileNotFoundError:
+                pass
+
+    def make_tiled_mosaic_jpeg_wrapper(self,in_file_path, out_file_path, tmp_path):
+        # Set number of threads to one, since these apps were not proxess parallelized
+        self.configure_env_for_single_threaded_execution()
+        # Make JPEG image of fixed image
+        self.run_bash_command_wrapper('CreateTiledMosaic -i {} -o {}/FixedTiled.nii' 
+                                      .format(in_file_path, tmp_path))
+        self.run_bash_command_wrapper('ConvertToJpg {}/FixedTiled.nii {}'
+                                      .format(tmp_path, out_file_path))
+        os.remove(tmp_path + '/FixedTiled.nii')
+
+    def dcm_to_nii_wrapper(self, nii_filename, dcm_input_dir_path):
+        """
+        self.tmp_path assumed to be output directory.
+        """
+        self.run_bash_command_wrapper(
+                                      'dcm2niix -o {} -f {} {}'
+                                      .format(self.tmp_path,
+                                              nii_filename,
+                                              dcm_input_dir_path)
+                                     )
+
+    def run_bash_command_wrapper(self,command_str):
+        print("PLUGIN DEBUG MSG: Running bash command: {}".format(command_str))
+        #subprocess.run(command_str.split())
+        subprocess.call(command_str, shell=True)
+
+    def configure_env_for_single_threaded_execution(self):
+        os.environ['ITK_THREADS_PER_WORKER'] = '1'
+        os.environ['ITK_NUMBER_OF_WORKERS'] = '1'
+        os.environ['ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS'] = '1'
+
+    def configure_env_for_multi_threaded_execution(self):
+        threads_per_worker = int(int(os.environ['CPU_LIMIT'].strip('m'))/1000)
+        os.environ['ITK_THREADS_PER_WORKER'] = str(threads_per_worker)
+        os.environ['ITK_NUMBER_OF_WORKERS'] = os.environ['NUMBER_OF_WORKERS']
+        os.environ['ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS'] = \
+          str(int(os.environ['NUMBER_OF_WORKERS']) * threads_per_worker)
 
     def run(self, options):
         """
@@ -242,15 +400,20 @@ class AntsReg(ChrisApp):
         if options.fixed == None:
             self.error("A fixed image is required.")
             return
-            
+        if options.speed != None:
+            if options.speed == 'fast':
+                self.ants_registration_command = 'antsRegistrationSyNQuick.sh'
+            elif options.speed == 'slow':
+                self.ants_registration_command = 'antsRegistrationSyN.sh'
+
         out_path = options.outputdir
         in_path = options.inputdir
 
         # Make tmp folder to hold output of DICOM -> NIFTI conversion and
-        # interprocess communication files and initiate file paths
-        self.tmp_path                = out_path + '/tmp'   
-        self.proc_num_file_path      = self.tmp_path + '/proc_num_sync'
-        self.proc_num_file_lock      = FileLock(self.tmp_path + '/proc_num_sync.lock')
+        # interworker communication files and initiate file paths
+        self.tmp_path                = out_path + '/tmp'
+        self.worker_num_file_path    = self.tmp_path + '/worker_num_sync'
+        self.worker_num_file_lock    = FileLock(self.tmp_path + '/worker_num_sync.lock')
         self.slave_state_file_path   = self.tmp_path + '/slave_state'
         self.slave_state_file_lock   = FileLock(self.tmp_path + '/slave_state.lock')
         self.args_file_path          = self.tmp_path + '/args_file'
@@ -259,24 +422,24 @@ class AntsReg(ChrisApp):
         except FileExistsError:
             pass
 
-        # Get process number. Process #0 becomes master.
+        # Get worker number. worker #0 becomes master.
         master = False;
-        proc_num = self.get_process_number()
-        if proc_num == 0:
+        worker_num = self.get_worker_number()
+        if worker_num == 0:
             master = True
-        os.environ['ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS'] = os.environ['NUMBER_OF_WORKERS']
-        os.environ['ITK_PROCESS_NUMBER']      = str(proc_num)
+        os.environ['ITK_WORKER_NUMBER'] = str(worker_num)
         os.environ['ITK_BARRIER_FILE_PREFIX'] = self.tmp_path + '/itkbarrier'
         os.environ['ITK_DATA_FILE_PREFIX']    = self.tmp_path + '/itkdata'
         os.environ['ITK_BARRIER_FILES_RESET'] = '1'
+        self.configure_env_for_multi_threaded_execution()
 
-        # This is the point where slave processes wait for master 
+        # This is the point where slave workeres wait for master 
         if master:
         	self.write_state(self.IDLE)
         else:
             # Slaves never return from this function.
             self.run_parallel_ants_registration_slave();
-        # Master process must reset itkbarrier files to 0
+        # Master worker must reset itkbarrier files to 0
         for i in range(int(os.environ['NUMBER_OF_WORKERS'])):
             with open(self.tmp_path + '/itkbarrier' + str(i),'wb+') as barrier_file:
                 barrier_file.write(b'\0'*8) #unsigned long
@@ -291,17 +454,15 @@ class AntsReg(ChrisApp):
         else:
             # Fixed image is a directory. Assume to contain .dcm files
             fixed_image_name = 'fixed_image'
-            subprocess.run('dcm2niix -o {} -f {} {}/{}'
-                           .format(self.tmp_path,fixed_image_name,in_path,options.fixed).split())
+            self.dcm_to_nii_wrapper(fixed_image_name, in_path + '/' + options.fixed)
             fixed_image_name = self.tmp_path + '/fixed_image.nii'
-        
+
         for name in os.listdir(in_path):
             if name == options.fixed or name == fixed_image_name: 
                 continue
             if not os.path.isfile(in_path + '/' + name):
                 # Assume to be directory full of .dcm slices
-                subprocess.run('dcm2niix -o {} -f {} {}/{}'
-                               .format(self.tmp_path,name,in_path,name).split())
+                self.dcm_to_nii_wrapper(name, in_path + '/' + name)
                 # dcm2niix might output multiple nifti files, but we'll assume there is only one
                 moving_image_list.append(self.tmp_path + '/' + name+'.nii')
 
@@ -312,51 +473,18 @@ class AntsReg(ChrisApp):
                 elif len(filename_split) > 2 and filename_split[-2] == 'nii': # .nii.gz extension
                     moving_image_list.append(in_path + '/' + name)
 
-        # Set Enviornment variable for single process exectution
-        os.environ['ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS'] = '1'
-        # Make JPEG image of fixed image
-        subprocess.run('CreateTiledMosaic -i {} -o {}/FixedTiled.nii' 
-                       .format(fixed_image_name, out_path)
-                       .split())
-        subprocess.run('ConvertToJpg {}/FixedTiled.nii {}/FixedTiled.jpg' 
-                       .format(out_path, out_path)
-                       .split())
-        os.remove(out_path + '/FixedTiled.nii')
-     
+        self.make_tiled_mosaic_jpeg_wrapper(fixed_image_name,
+                                            '{}/FixedTiled.jpg'.format(out_path),
+                                            out_path)
         # Run ANTS registration on each of the moving images and create JPEG Tiled image
         for moving_image_name in moving_image_list:
-            name_wo_ext = moving_image_name.split('/')[-1].split('.')[0]
-
-            # Set Enviornment variable for multiple process exectution
-            os.environ['ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS'] = os.environ['NUMBER_OF_WORKERS']
-            args = [fixed_image_name,moving_image_name,out_path,name_wo_ext]
-            self.run_parallel_ants_registration_master(args)
-            
-            # Set Enviornment variable for single process exectution
-            os.environ['ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS'] = '1'
-            # Make Tiled Mosaic JPEG
-            subprocess.run('CreateTiledMosaic -i {}/{}Warped.nii.gz -o {}/{}WarpedTiled.nii' 
-                           .format(out_path, name_wo_ext, 
-                                   out_path, name_wo_ext)
-                           .split())
-            subprocess.run('ConvertToJpg {}/{}WarpedTiled.nii {}/{}WarpedTiled.jpg' 
-                           .format(out_path, name_wo_ext,
-                                   out_path, name_wo_ext)
-                           .split())
-            
-            # Remove extra outputs
-            files_to_be_removed = [out_path + '/' + name_wo_ext + '1InverseWarp.nii.gz',
-                                   out_path + '/' + name_wo_ext + '1Warp.nii.gz',
-                                   out_path + '/' + name_wo_ext + 'InverseWarped.nii.gz',
-                                   out_path + '/' + name_wo_ext + '0GenericAffine.mat',
-                                   out_path + '/' + name_wo_ext + 'WarpedTiled.nii']
-            for filename in files_to_be_removed:
-                try:
-                    os.remove(filename)
-                except FileNotFoundError:
-                    pass
-        self.write_state(self.EXIT)  # Terminate slave processes
-        self.exit_process()
+            print("PLUGIN DEBUG MSG: Registering {} to {} ... "
+                  .format(moving_image_name, fixed_image_name))
+            self.run_parallel_ants_registration_master_wrapper(fixed_image_name,
+                                                               moving_image_name,
+                                                               out_path)
+        self.write_state(self.EXIT)  # Terminate slave workeres
+        self.exit_worker()
 
 # ENTRYPOINT
 if __name__ == "__main__":
