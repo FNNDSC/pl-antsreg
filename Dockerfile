@@ -47,4 +47,4 @@ RUN cd $HOME &&                                             \
 
 RUN pip3 install -r requirements.txt
 
-CMD ["antsreg.py", "--json"]
+CMD ["antsreg.py", "--help"]
