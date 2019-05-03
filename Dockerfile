@@ -3,7 +3,7 @@
 FROM fnndsc/centos-python3:latest
 MAINTAINER fnndsc "dev@babymri.org"
 
-ENV APPROOT="/usr/src/antsreg"  VERSION="0.1"
+ENV APPROOT="/usr/src/antsreg" 
 COPY ["antsreg", "${APPROOT}"]
 COPY ["requirements.txt", "${APPROOT}"]
 
